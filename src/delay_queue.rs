@@ -1,8 +1,9 @@
+use delayed::Delayed;
+use std::cmp::Ordering;
+use std::collections::binary_heap::Drain;
 use std::collections::BinaryHeap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
-use std::cmp::Ordering;
-use delayed::Delayed;
 
 /// A concurrent unbounded blocking queue where each item can only be removed when its delay
 /// expires.
@@ -278,7 +279,8 @@ impl<T: Delayed> DelayQueue<T> {
             // Wait until there is a new head of the queue,
             // the time to pop the current head expires,
             // or the timeout expires
-            queue = self.shared_data
+            queue = self
+                .shared_data
                 .condvar_new_head
                 .wait_timeout(queue, wait_duration)
                 .unwrap()
@@ -325,6 +327,12 @@ impl<T: Delayed> DelayQueue<T> {
 
         queue.pop().unwrap().delayed
     }
+
+    /// Drains all the entries from the queue without checking if they're ready or not
+    pub fn drain(&self) -> Vec<T> {
+        let mut queue = self.shared_data.queue.lock().unwrap();
+        queue.drain().map(|v| v.delayed).collect()
+    }
 }
 
 impl<T: Delayed> Default for DelayQueue<T> {
@@ -370,7 +378,6 @@ impl<T: Delayed> Clone for DelayQueue<T> {
     }
 }
 
-
 /// An entry in the `DelayQueue`.
 ///
 /// Holds a `Delayed` item and implements an ordering based on delay `Instant`s of the items.
@@ -413,16 +420,15 @@ impl<T: Delayed> PartialEq for Entry<T> {
 
 impl<T: Delayed> Eq for Entry<T> {}
 
-
 #[cfg(test)]
 mod tests {
     extern crate timebomb;
 
     use self::timebomb::timeout_ms;
-    use std::time::{Duration, Instant};
-    use std::thread;
-    use delayed::Delay;
     use super::{DelayQueue, Entry};
+    use delayed::Delay;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn entry_comparisons() {
@@ -739,5 +745,20 @@ mod tests {
             },
             1000,
         );
+    }
+
+    #[test]
+    fn drain() {
+        let mut queue = DelayQueue::new();
+
+        let delay1 = Delay::until_instant("1st", Instant::now());
+        let delay2 = Delay::for_duration("2nd", Duration::from_millis(500));
+        let delay3 = Delay::for_duration("3nd", Duration::from_millis(1000));
+
+        queue.push(delay1);
+        queue.push(delay2);
+        queue.push(delay3);
+
+        assert_eq!(queue.drain().len(), 3);
     }
 }
